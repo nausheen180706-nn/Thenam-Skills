@@ -27,7 +27,7 @@ import { INITIAL_COMMUNITIES } from '../mock/communities';
 import { useAuth } from './AuthContext';
 import { api } from '../services/api';
 import { socket } from '../services/socket';
-import { createEventInFirestore, subscribeToEvents, toggleEventRegistration as toggleEventRegistrationInFirestore, deleteEvent as deleteEventInFirestore } from '../firebase/firestore';
+import { createEventInFirestore, updateEventInFirestore, subscribeToEvents, toggleEventRegistration as toggleEventRegistrationInFirestore, deleteEvent as deleteEventInFirestore } from '../firebase/firestore';
 
 interface AutomationPayload {
   title: string;
@@ -107,6 +107,7 @@ interface AppContextType {
 
   // New Features
   createEvent: (eventData: Omit<EventItem, 'id' | 'registeredCount' | 'isRegistered'>) => Promise<void>;
+  updateEvent: (eventId: string, eventData: Partial<EventItem>) => Promise<void>;
   deleteEvent: (eventId: string) => Promise<void>;
   toggleFollowEducator: (educatorId: string) => void;
 }
@@ -141,7 +142,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       location: currentUserProfile.collegeLocation 
         ? `${currentUserProfile.collegeLocation.city}, ${currentUserProfile.collegeLocation.state}` 
         : currentUserProfile.location || 'Chennai, India',
-      avatar: currentUserProfile.photoURL || currentUserProfile.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=400&auto=format&fit=crop&q=80',
+      avatar: currentUserProfile.name?.toLowerCase().includes('jayamurugan') 
+        ? 'https://cdn.phototourl.com/free/2026-08-26-5659434f-46e0-4faa-8391-72dfeefaa208.jpg' 
+        : (currentUserProfile.photoURL || currentUserProfile.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=400&auto=format&fit=crop&q=80'),
       coverImage: currentUserProfile.coverImage || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
       bio: currentUserProfile.bio || 'THENAM student building professional identity.',
       email: currentUserProfile.email || '',
@@ -271,6 +274,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       };
       socket.on('new_event_notification', onNewEventNotification);
 
+      const onNewActivityNotification = (activityData: any) => {
+        setNotifications(nPrev => [{
+          id: `notif_${Date.now()}_${Math.random()}`,
+          type: 'system',
+          title: `New Educator Update`,
+          message: `${activityData.author?.name || 'An Educator'} posted: ${activityData.title || activityData.description?.substring(0, 30) || 'a new update'}`,
+          timestamp: 'Just now',
+          isRead: false,
+          link: '/feed',
+          badgeIcon: 'radio'
+        }, ...nPrev]);
+      };
+      socket.on('new_activity_notification', onNewActivityNotification);
+
       // Listen to real-time events from Firestore
       const unsubscribeEvents = subscribeToEvents(
         (liveEvents) => {
@@ -353,11 +370,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               timestamp: act.createdAt ? new Date(act.createdAt).toLocaleDateString() : 'Just now',
               metadata: metadata,
               author: {
-                id: act.user?.firebaseUid || act.user?.id || '',
-                name: act.user?.name || 'Student',
-                avatar: act.user?.avatar || act.user?.photoURL || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=400&auto=format&fit=crop&q=80',
-                headline: act.user?.headline || `${act.user?.year || 'Student'} - ${act.user?.department || 'Engineering'}`,
-                college: act.user?.college || act.user?.collegeName || 'DMI College of Engineering'
+                id: act.author?.id || act.user?.firebaseUid || act.user?.id || (typeof act.user === 'string' ? act.user : '') || '',
+                name: act.author?.name || act.user?.name || 'THENAM Member',
+                avatar: act.author?.avatar || act.user?.photoURL || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=400&auto=format&fit=crop&q=80',
+                headline: act.author?.headline || (act.user?.department ? `${act.user.department} • ${act.user.collegeName || ''}` : 'THENAM Member'),
+                college: act.author?.college || act.user?.collegeName || 'THENAM Campus'
               },
               likesCount: act.likesCount || 0,
               commentsCount: act.commentsCount || 0,
@@ -374,6 +391,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         })
         .catch(err => {
           console.error('Failed to load activities from API:', err);
+          setActivities([]); // Do not fallback to mock data
           setIsFeedLoading(false);
         });
 
@@ -410,6 +428,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (updated.college) dbUpdates.collegeName = updated.college;
       if (updated.phone) dbUpdates.phoneNumber = updated.phone;
       if (updated.avatar) dbUpdates.photoURL = updated.avatar;
+      if (updated.coverImage) dbUpdates.coverImage = updated.coverImage;
+      if (updated.dateOfBirth) dbUpdates.dateOfBirth = updated.dateOfBirth;
+      if (updated.bio !== undefined) dbUpdates.bio = updated.bio;
       if (updated.linkedinUrl !== undefined) dbUpdates.linkedinURL = updated.linkedinUrl || null;
       if (updated.githubUrl !== undefined) dbUpdates.githubURL = updated.githubUrl || null;
       if (updated.location) {
@@ -646,26 +667,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Activity Feed interactions
   const createActivity = async (activityData: Omit<ActivityItem, 'id' | 'timestamp' | 'likesCount' | 'isLiked' | 'commentsCount' | 'comments' | 'sharesCount'>) => {
-    try {
-      await api.post('/activities', activityData);
-      
-      const newActivity: ActivityItem = {
-        ...activityData,
-        id: `act_${Date.now()}`,
-        timestamp: 'Just now',
-        createdAt: new Date().toISOString(),
-        likesCount: 0,
-        isLiked: false,
-        commentsCount: 0,
-        comments: [],
-        sharesCount: 0
-      };
-      setActivities(prev => [newActivity, ...prev]);
-      showToast('Activity shared with your THENAM network!');
-    } catch (err) {
-      console.error('Failed to create activity:', err);
-      showToast('Failed to publish activity.');
-    }
+    const newActivity: ActivityItem = {
+      ...activityData,
+      id: `act_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      timestamp: 'Just now',
+      createdAt: new Date().toISOString(),
+      likesCount: 0,
+      isLiked: false,
+      commentsCount: 0,
+      comments: [],
+      sharesCount: 0
+    };
+    
+    // Instant optimistic UI update
+    setActivities(prev => [newActivity, ...prev]);
+    showToast('Activity published to THENAM feed!');
+
+    // Async background sync with API (non-blocking)
+    api.post('/activities', activityData).catch(err => {
+      console.error('Failed to sync activity to server:', err);
+    });
+
+    return newActivity;
   };
 
   const toggleLikeActivity = async (activityId: string) => {
@@ -899,6 +922,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     showToast('Event created successfully and broadcasted globally!');
   };
 
+  const updateEvent = async (eventId: string, eventData: Partial<EventItem>) => {
+    try {
+      await updateEventInFirestore(eventId, eventData);
+      showToast('Event updated successfully!');
+    } catch (err) {
+      console.error('Failed to update event in Firestore:', err);
+      showToast('Error updating event.');
+      throw err;
+    }
+  };
+
   const deleteEvent = async (eventId: string) => {
     const event = events.find(ev => ev.id === eventId);
     if (!event) return;
@@ -1080,6 +1114,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         toastMessage,
         showToast,
         createEvent,
+        updateEvent,
         deleteEvent,
         toggleFollowEducator
       }}

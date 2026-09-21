@@ -1,17 +1,81 @@
 import React, { useState } from 'react';
-import { X, Calendar, Clock, MapPin, Users, Image as ImageIcon, Briefcase, Award, Loader2, Plus, Trash2, Video, Link as LinkIcon } from 'lucide-react';
+import { X, Calendar, Clock, MapPin, Users, Image as ImageIcon, Briefcase, Award, Loader2, Plus, Trash2, Video, Link as LinkIcon, Search, ChevronDown, UserCheck } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Module } from '../types';
+import { Module, EventItem } from '../types';
 import { getYouTubeEmbedData } from '../utils/youtube';
+import { storageService } from '../firebase/storage';
+import { api } from '../services/api';
+import { useEffect } from 'react';
 
 interface CreateEventModalProps {
   isOpen: boolean;
   onClose: () => void;
+  eventToEdit?: EventItem;
 }
 
-export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onClose }) => {
-  const { currentUser, createEvent, showToast } = useApp();
+export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onClose, eventToEdit }) => {
+  const { currentUser, createEvent, updateEvent, showToast } = useApp();
   const [loading, setLoading] = useState(false);
+  const [coverImageFile, setCoverImageFile] = useState<File | null>(null);
+  const [coverImagePreview, setCoverImagePreview] = useState<string>('');
+
+  // Presenter/Speaker selection
+  const [availableEducators, setAvailableEducators] = useState<any[]>([]);
+  const [isLoadingEducators, setIsLoadingEducators] = useState(false);
+  const [speakerSearchQuery, setSpeakerSearchQuery] = useState('');
+  const [isSpeakerDropdownOpen, setIsSpeakerDropdownOpen] = useState(false);
+  const [selectedSpeaker, setSelectedSpeaker] = useState<{
+    name: string;
+    role: string;
+    company: string;
+    avatar: string;
+  } | null>(null);
+
+  // Fetch educators for presenter selection
+  useEffect(() => {
+    if (!isOpen) return;
+    const fetchEducators = async () => {
+      setIsLoadingEducators(true);
+      try {
+        const res = await api.get('/admin/users');
+        const data = res.data?.data || res.data || [];
+        setAvailableEducators(data.filter((u: any) => u.profileCompleted));
+      } catch (err) {
+        console.error('Failed to fetch educators:', err);
+        // Fallback: just use current user
+        setAvailableEducators([]);
+      } finally {
+        setIsLoadingEducators(false);
+      }
+    };
+    fetchEducators();
+  }, [isOpen]);
+
+  // Set default speaker to current user
+  useEffect(() => {
+    if (isOpen && !selectedSpeaker && currentUser) {
+      setSelectedSpeaker({
+        name: currentUser.name,
+        role: currentUser.headline || '',
+        company: currentUser.college || '',
+        avatar: currentUser.avatar || ''
+      });
+    }
+    if (isOpen && eventToEdit) {
+      setSelectedSpeaker({
+        name: eventToEdit.speaker.name,
+        role: eventToEdit.speaker.role,
+        company: eventToEdit.speaker.company,
+        avatar: eventToEdit.speaker.avatar
+      });
+    }
+  }, [isOpen, eventToEdit, currentUser]);
+
+  const filteredEducators = availableEducators.filter(u =>
+    u.name?.toLowerCase().includes(speakerSearchQuery.toLowerCase()) ||
+    u.headline?.toLowerCase().includes(speakerSearchQuery.toLowerCase()) ||
+    u.college?.toLowerCase().includes(speakerSearchQuery.toLowerCase())
+  );
 
   const [formData, setFormData] = useState({
     title: '',
@@ -28,6 +92,50 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onCl
     certificateOffered: true,
     modules: [] as Partial<Module>[]
   });
+
+  useEffect(() => {
+    if (eventToEdit) {
+      setFormData({
+        title: eventToEdit.title || '',
+        type: eventToEdit.type || 'workshop',
+        mode: (eventToEdit.mode as any) || 'live_scheduled',
+        domain: eventToEdit.domain || '',
+        date: eventToEdit.date || '',
+        time: eventToEdit.time || '',
+        duration: eventToEdit.duration || '',
+        description: evDescriptionClean(eventToEdit.description) || '',
+        maxCapacity: eventToEdit.maxCapacity || 100,
+        coverImage: eventToEdit.coverImage || '',
+        meetingLink: eventToEdit.meetingLink || '',
+        certificateOffered: eventToEdit.certificateOffered !== false,
+        modules: eventToEdit.modules || []
+      });
+      setCoverImagePreview(eventToEdit.coverImage || '');
+    } else {
+      setFormData({
+        title: '',
+        type: 'workshop',
+        mode: 'live_scheduled',
+        domain: '',
+        date: '',
+        time: '',
+        duration: '',
+        description: '',
+        maxCapacity: 100,
+        coverImage: '',
+        meetingLink: '',
+        certificateOffered: true,
+        modules: []
+      });
+      setCoverImagePreview('');
+      setCoverImageFile(null);
+    }
+  }, [eventToEdit, isOpen]);
+
+  function evDescriptionClean(desc: string) {
+    if (!desc) return '';
+    return desc.replace(/\*\*/g, '').replace(/\*/g, '').replace(/__/g, '').replace(/`/g, '');
+  }
 
   if (!isOpen) return null;
 
@@ -90,7 +198,15 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onCl
           })
         : undefined;
 
-      createEvent({
+      let finalCoverImage = formData.coverImage || 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1200&auto=format&fit=crop&q=80';
+      
+      if (coverImageFile) {
+        // We don't have the event ID yet, so use a timestamp-based ID
+        const tempId = `temp_${Date.now()}`;
+        finalCoverImage = await storageService.uploadEventCover(tempId, coverImageFile);
+      }
+
+      const eventPayload = {
         title: formData.title,
         type: formData.type,
         mode: formData.mode,
@@ -100,20 +216,36 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onCl
         duration: formData.duration,
         description: formData.description,
         maxCapacity: Number(formData.maxCapacity),
-        coverImage: formData.coverImage || 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1200&auto=format&fit=crop&q=80',
+        coverImage: finalCoverImage,
         meetingLink: formData.mode === 'live_scheduled' ? formData.meetingLink : undefined,
         scheduledAt: formData.mode === 'live_scheduled' ? `${formData.date}T${formData.time}` : undefined,
         certificateOffered: formData.certificateOffered,
         certificateEnabled: formData.certificateOffered,
         modules: finalModules,
-        speaker: {
-          name: currentUser.name,
-          role: currentUser.headline,
-          company: currentUser.college,
-          avatar: currentUser.avatar
-        },
-        agenda: []
-      });
+      };
+
+      if (eventToEdit) {
+        await updateEvent(eventToEdit.id, {
+          ...eventPayload,
+          speaker: selectedSpeaker || {
+            name: currentUser.name,
+            role: currentUser.headline,
+            company: currentUser.college,
+            avatar: currentUser.avatar
+          }
+        });
+      } else {
+        await createEvent({
+          ...eventPayload,
+          speaker: selectedSpeaker || {
+            name: currentUser.name,
+            role: currentUser.headline,
+            company: currentUser.college,
+            avatar: currentUser.avatar
+          },
+          agenda: []
+        });
+      }
       onClose();
     } catch (err) {
       console.error(err);
@@ -288,6 +420,97 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onCl
                 </div>
               </div>
 
+              {/* Presenter / Speaker Selection */}
+              <div className="border-t border-slate-100 pt-5">
+                <label className="block text-xs font-bold text-slate-700 mb-2 flex items-center gap-1.5">
+                  <UserCheck className="w-4 h-4 text-indigo-500" />
+                  <span>Presenter / Speaker</span>
+                </label>
+
+                {/* Selected speaker preview */}
+                {selectedSpeaker && (
+                  <div className="flex items-center gap-3 p-3 bg-indigo-50/50 rounded-xl border border-indigo-200/50 mb-3">
+                    <img
+                      src={selectedSpeaker.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(selectedSpeaker.name)}&background=random&color=fff&size=80`}
+                      alt={selectedSpeaker.name}
+                      className="w-10 h-10 rounded-full object-cover border-2 border-white shadow-sm"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-900 truncate">{selectedSpeaker.name}</p>
+                      <p className="text-[11px] text-slate-500 truncate">{selectedSpeaker.role} {selectedSpeaker.company ? `- ${selectedSpeaker.company}` : ''}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsSpeakerDropdownOpen(!isSpeakerDropdownOpen)}
+                      className="text-xs font-bold text-indigo-600 hover:text-indigo-800 px-3 py-1.5 rounded-lg bg-white border border-indigo-200 hover:bg-indigo-50 transition-colors"
+                    >
+                      Change
+                    </button>
+                  </div>
+                )}
+
+                {/* Searchable presenter dropdown */}
+                {(isSpeakerDropdownOpen || !selectedSpeaker) && (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Search educators by name..."
+                        value={speakerSearchQuery}
+                        onChange={(e) => setSpeakerSearchQuery(e.target.value)}
+                        className="w-full pl-9 pr-3 py-2.5 text-sm bg-slate-50 border-b border-slate-200 focus:bg-white outline-hidden"
+                      />
+                    </div>
+                    <div className="max-h-48 overflow-y-auto">
+                      {isLoadingEducators ? (
+                        <div className="p-4 text-center flex items-center justify-center gap-2 text-slate-500 text-xs">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Loading educators...
+                        </div>
+                      ) : filteredEducators.length === 0 ? (
+                        <div className="p-4 text-center text-slate-400 text-xs">
+                          No educators found{speakerSearchQuery ? ` for "${speakerSearchQuery}"` : ''}
+                        </div>
+                      ) : (
+                        filteredEducators.map((edu) => (
+                          <button
+                            key={edu.uid || edu.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedSpeaker({
+                                name: edu.name || edu.displayName || 'Educator',
+                                role: edu.headline || edu.role || 'Educator',
+                                company: edu.college || edu.organization || '',
+                                avatar: edu.avatar || edu.photoURL || ''
+                              });
+                              setIsSpeakerDropdownOpen(false);
+                              setSpeakerSearchQuery('');
+                            }}
+                            className={`w-full flex items-center gap-3 p-3 hover:bg-indigo-50/50 transition-colors text-left border-b border-slate-100/50 last:border-b-0 ${
+                              selectedSpeaker?.name === (edu.name || edu.displayName) ? 'bg-indigo-50/70' : ''
+                            }`}
+                          >
+                            <img
+                              src={edu.avatar || edu.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(edu.name || 'E')}&background=random&color=fff&size=80`}
+                              alt={edu.name}
+                              className="w-9 h-9 rounded-full object-cover border border-slate-200 shrink-0"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold text-slate-900 truncate">{edu.name || edu.displayName}</p>
+                              <p className="text-[10px] text-slate-500 truncate">{edu.headline || edu.role || 'Educator'} {edu.college ? `- ${edu.college}` : ''}</p>
+                            </div>
+                            {selectedSpeaker?.name === (edu.name || edu.displayName) && (
+                              <span className="text-[9px] font-black uppercase text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded-md">Selected</span>
+                            )}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {formData.mode === 'live_scheduled' && (
                 <div className="space-y-1.5 mt-5">
                   <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
@@ -321,24 +544,51 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onCl
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Cover Image URL</label>
-                <p className="text-[10px] text-slate-500 mb-2">Recommended dimension: 1280 × 720 pixels (16:9 landscape aspect ratio).</p>
-                <div className="relative mb-3">
-                  <ImageIcon className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="url"
-                    placeholder="https://images.unsplash.com/..."
-                    value={formData.coverImage}
-                    onChange={(e) => setFormData({ ...formData, coverImage: e.target.value })}
-                    className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-all outline-hidden"
-                  />
+                <label className="block text-xs font-bold text-slate-700 mb-1">Cover Image</label>
+                <p className="text-[10px] text-slate-500 mb-2">Recommended dimension: 1280 × 720 pixels (16:9 landscape aspect ratio). Provide a URL or upload an image.</p>
+                <div className="relative mb-3 flex gap-2">
+                  <div className="relative flex-1">
+                    <ImageIcon className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="url"
+                      placeholder="https://images.unsplash.com/..."
+                      value={formData.coverImage}
+                      onChange={(e) => {
+                        setFormData({ ...formData, coverImage: e.target.value });
+                        if (e.target.value) setCoverImageFile(null); // Clear file if URL is provided
+                      }}
+                      className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 transition-all outline-hidden"
+                    />
+                  </div>
+                  <label className="flex items-center justify-center px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold cursor-pointer transition-colors whitespace-nowrap">
+                    Upload File
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          if (file.size > 5 * 1024 * 1024) {
+                            showToast('Cover image must be less than 5 MB.');
+                            return;
+                          }
+                          setCoverImageFile(file);
+                          setFormData({ ...formData, coverImage: '' }); // Clear URL if file is selected
+                          const reader = new FileReader();
+                          reader.onloadend = () => setCoverImagePreview(reader.result as string);
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    />
+                  </label>
                 </div>
                 
                 {/* 16:9 Image Preview */}
                 <div className="w-full aspect-video rounded-xl border border-slate-200 overflow-hidden bg-slate-100 relative">
-                  {formData.coverImage ? (
+                  {(formData.coverImage || coverImagePreview) ? (
                     <img 
-                      src={formData.coverImage} 
+                      src={formData.coverImage || coverImagePreview} 
                       alt="Cover Preview" 
                       className="w-full h-full object-cover"
                       onError={(e) => {
@@ -347,7 +597,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onCl
                       }}
                     />
                   ) : null}
-                  <div className={`absolute inset-0 flex flex-col items-center justify-center text-slate-400 ${formData.coverImage ? 'hidden' : ''}`}>
+                  <div className={`absolute inset-0 flex flex-col items-center justify-center text-slate-400 ${(formData.coverImage || coverImagePreview) ? 'hidden' : ''}`}>
                     <ImageIcon className="w-8 h-8 mb-2 opacity-50" />
                     <span className="text-[10px] font-bold uppercase tracking-wider opacity-50">1280 × 720 Preview</span>
                     

@@ -24,6 +24,8 @@ import {
 import { ActivityItem } from '../types';
 import { useApp } from '../context/AppContext';
 import { useRouter } from '../context/RouterContext';
+import { ActivityModal } from './ActivityModal';
+import { cleanPostContent } from '../utils/textCleaner';
 
 import { getRelativeTime } from '../utils/time';
 
@@ -40,6 +42,13 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const cleanTitle = cleanPostContent(activity.title);
+  const cleanDesc = cleanPostContent(activity.description);
+
+  const isLongDescription = cleanDesc && (cleanDesc.length > 150 || cleanDesc.split('\n').length > 2);
+  const showTitle = cleanTitle && cleanTitle.toLowerCase() !== cleanDesc.split('\n')[0]?.trim().toLowerCase() && activity.type !== 'student_post';
 
   const handleAddComment = (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,10 +59,35 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
   };
 
   const handleCopyLink = () => {
-    navigator.clipboard.writeText(`https://thenamskills.edu/feed/${activity.id}`);
+    navigator.clipboard.writeText(`https://thenam-campus.vercel.app//feed/${activity.id}`);
     setCopied(true);
     showToast('Activity link copied to clipboard!');
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleNativeShare = async () => {
+    const shareUrl = `https://thenam-campus.vercel.app//feed/${activity.id}`;
+    const shareTitle = activity.title || `Post by ${activity.author.name}`;
+    const shareText = activity.description ? activity.description.substring(0, 100) + '...' : `Check out this post on Thenam Skills!`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: shareTitle,
+          text: shareText,
+          url: shareUrl,
+        });
+        showToast('Shared successfully!');
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') {
+          console.error('Error sharing:', error);
+          setIsShareModalOpen(true);
+        }
+      }
+    } else {
+      // Fallback for browsers that don't support Web Share API
+      setIsShareModalOpen(true);
+    }
   };
 
   // Badges and Theme styles based on Activity Type
@@ -184,37 +218,66 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
 
       {/* Author Header */}
       <div className="p-4 sm:p-6 pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <div
-            onClick={() => navigate(`/profile/${activity.author.id}`)}
-            className="flex items-center gap-3 cursor-pointer group"
-          >
-            <img
-              src={activity.author.avatar}
-              alt={activity.author.name}
-              className="w-11 h-11 rounded-full object-cover border border-slate-200 group-hover:ring-2 group-hover:ring-indigo-400 transition-all"
-            />
-            <div>
-              <div className="flex items-center gap-1.5">
-                <h4 className="text-sm font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
-                  {activity.author.name}
-                </h4>
-                <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600" />
+        {(() => {
+          const authorName = activity.author?.name && activity.author.name !== 'User Not Found' ? activity.author.name : 'THENAM Campus Student';
+          const authorHeadline = activity.author?.headline || 'Verified Campus Scholar';
+          const authorCollege = activity.author?.college || 'THENAM Ecosystem';
+          const avatarSrc = authorName.toLowerCase().includes('jayamurugan')
+            ? 'https://cdn.phototourl.com/free/2026-08-26-5659434f-46e0-4faa-8391-72dfeefaa208.jpg'
+            : (isAuthor ? currentUser.avatar : (activity.author?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(authorName)}&background=random&color=fff&size=100`));
+
+          return (
+            <div className="flex items-center justify-between gap-3">
+              <div
+                onClick={() => activity.author?.id && navigate(`/profile/${activity.author.id}`)}
+                className="flex items-center gap-3 cursor-pointer group"
+              >
+                <img
+                  src={avatarSrc}
+                  alt={authorName}
+                  referrerPolicy="no-referrer"
+                  className="w-11 h-11 rounded-full object-cover border border-slate-200 group-hover:ring-2 group-hover:ring-indigo-400 transition-all bg-slate-100"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    target.onerror = null;
+                    target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(authorName)}&background=random&color=fff&size=100`;
+                  }}
+                />
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h4 className="text-sm font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
+                      {authorName}
+                    </h4>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600" />
+                  </div>
+                  <p className="text-xs text-slate-500">{authorHeadline}</p>
+                  <p className="text-[11px] text-slate-400 font-medium">{authorCollege}</p>
+                </div>
               </div>
-              <p className="text-xs text-slate-500">{activity.author.headline}</p>
-              <p className="text-[11px] text-slate-400 font-medium">{activity.author.college}</p>
             </div>
-          </div>
-        </div>
+          );
+        })()}
 
         {/* Activity Content */}
         <div className="mt-4 space-y-2">
-          <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
-            {activity.title}
-          </h3>
-          <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line">
-            {activity.description}
-          </p>
+          {showTitle && (
+            <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
+              {cleanTitle}
+            </h3>
+          )}
+          <div className="text-sm text-slate-600 leading-relaxed whitespace-pre-wrap">
+            <div className={isLongDescription ? "line-clamp-2" : ""}>
+              {cleanDesc}
+            </div>
+            {isLongDescription && (
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="text-slate-500 font-bold hover:text-indigo-600 mt-0.5 cursor-pointer transition-colors text-xs"
+              >
+                ...see more
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Dynamic Activity Metadata Embeds */}
@@ -316,11 +379,10 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
                     key={index}
                     src={url}
                     alt={`Activity image ${index + 1}`}
-                    className={`w-full h-auto max-h-[550px] object-contain rounded-xl ${
-                      activity.metadata!.imageUrls!.length === 3 && index === 0 
-                        ? 'row-span-2' 
+                    className={`w-full h-auto max-h-[550px] object-contain rounded-xl ${activity.metadata!.imageUrls!.length === 3 && index === 0
+                        ? 'row-span-2'
                         : ''
-                    }`}
+                      }`}
                     onError={(e) => {
                       e.currentTarget.onerror = null;
                       e.currentTarget.src = 'https://placehold.co/600x400/e2e8f0/475569?text=Image+Not+Found';
@@ -341,6 +403,34 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
             )}
           </div>
         )}
+        {activity.metadata?.externalUrl && (
+          <div className="mt-4 p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3 group hover:border-indigo-300 transition-all">
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600 shrink-0">
+                <ExternalLink className="w-4 h-4" />
+              </div>
+              <div className="truncate">
+                <span className="text-[10px] uppercase font-bold text-indigo-600 tracking-wider block">Attached Link</span>
+                <a
+                  href={activity.metadata.externalUrl.startsWith('http://') || activity.metadata.externalUrl.startsWith('https://') ? activity.metadata.externalUrl : `https://${activity.metadata.externalUrl}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-bold text-slate-900 group-hover:text-indigo-600 truncate block"
+                >
+                  {activity.metadata.externalUrl}
+                </a>
+              </div>
+            </div>
+            <a
+              href={activity.metadata.externalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-lg group-hover:bg-indigo-600 group-hover:text-white group-hover:border-indigo-600 transition-all shrink-0"
+            >
+              Open
+            </a>
+          </div>
+        )}
       </div>
 
       {/* Social Actions Footer */}
@@ -349,11 +439,10 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
           <button
             id={`btn-like-${activity.id}`}
             onClick={() => toggleLikeActivity(activity.id)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${
-              activity.isLiked
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors ${activity.isLiked
                 ? 'text-rose-600 bg-rose-50 font-bold'
                 : 'text-slate-600 hover:bg-slate-100'
-            }`}
+              }`}
           >
             <Heart className={`w-4 h-4 ${activity.isLiked ? 'fill-rose-600 text-rose-600' : ''}`} />
             <span>{activity.likesCount}</span>
@@ -369,7 +458,7 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
           </button>
 
           <button
-            onClick={() => setIsShareModalOpen(true)}
+            onClick={handleNativeShare}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
           >
             <Share2 className="w-4 h-4" />
@@ -379,9 +468,8 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
 
         <button
           onClick={() => toggleSaveActivity(activity.id)}
-          className={`p-2 rounded-lg transition-colors ${
-            activity.isSaved ? 'text-indigo-600 bg-indigo-50 font-bold' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
-          }`}
+          className={`p-2 rounded-lg transition-colors ${activity.isSaved ? 'text-indigo-600 bg-indigo-50 font-bold' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'
+            }`}
           title="Save Activity"
         >
           <Bookmark className={`w-4 h-4 ${activity.isSaved ? 'fill-indigo-600 text-indigo-600' : ''}`} />
@@ -396,7 +484,13 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
             <img
               src={currentUser.avatar}
               alt={currentUser.name}
-              className="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0"
+              referrerPolicy="no-referrer"
+              className="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0 bg-slate-100"
+              onError={(e) => {
+                const target = e.target as HTMLImageElement;
+                target.onerror = null;
+                target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.name || 'User')}&background=random&color=fff&size=100`;
+              }}
             />
             <input
               type="text"
@@ -422,9 +516,17 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
               activity.comments.map((comm) => (
                 <div key={comm.id} className="flex gap-2.5 bg-white p-3 rounded-xl border border-slate-150 text-xs">
                   <img
-                    src={comm.author.avatar}
+                    src={comm.author.name?.toLowerCase().includes('jayamurugan')
+                      ? 'https://cdn.phototourl.com/free/2026-08-26-5659434f-46e0-4faa-8391-72dfeefaa208.jpg'
+                      : (comm.author.name === currentUser.name || (comm as any).userId === currentUser.id ? currentUser.avatar : comm.author.avatar)}
                     alt={comm.author.name}
-                    className="w-7 h-7 rounded-full object-cover shrink-0"
+                    referrerPolicy="no-referrer"
+                    className="w-7 h-7 rounded-full object-cover shrink-0 bg-slate-100"
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      target.onerror = null;
+                      target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(comm.author.name || 'User')}&background=random&color=fff&size=100`;
+                    }}
                   />
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
@@ -447,7 +549,7 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl border border-slate-200">
             <h4 className="text-base font-bold text-slate-900">Share Learning Activity</h4>
             <p className="text-xs text-slate-500">Spread verified peer achievements across professional channels.</p>
-            
+
             <div className="space-y-2">
               <button
                 onClick={handleCopyLink}
@@ -477,6 +579,13 @@ export const LearningActivityCard: React.FC<LearningActivityCardProps> = ({ acti
             </button>
           </div>
         </div>
+      )}
+
+      {isModalOpen && (
+        <ActivityModal
+          activity={activity}
+          onClose={() => setIsModalOpen(false)}
+        />
       )}
     </article>
   );

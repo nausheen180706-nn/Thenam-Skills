@@ -5,7 +5,7 @@ import { SkillSelector } from './SkillSelector';
 
 interface StudentProfileFormProps {
   initialData: Partial<StudentProfile>;
-  onSubmit: (data: any, imageFile: File | null) => Promise<void>;
+  onSubmit: (data: any, imageFile: File | null, coverImageFile: File | null) => Promise<void>;
   submitLabel: string;
   loading: boolean;
   role?: string;
@@ -35,7 +35,7 @@ export const StudentProfileForm: React.FC<StudentProfileFormProps> = ({
   loading,
   role
 }) => {
-  const canUploadImage = role === 'faculty' || role === 'admin';
+  const canUploadImage = true;
   
   // Form fields states
   const [name, setName] = useState(initialData.name || '');
@@ -55,11 +55,15 @@ export const StudentProfileForm: React.FC<StudentProfileFormProps> = ({
   const [imagePreview, setImagePreview] = useState<string>(initialData.avatar || '');
   const [imageFile, setImageFile] = useState<File | null>(null);
 
+  const [coverImagePreview, setCoverImagePreview] = useState<string>(initialData.coverImage || '');
+  const [coverImageFile, setCoverImageFile] = useState<File | null>(null);
+
   // Validation errors state
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (initialData.avatar) setImagePreview(initialData.avatar);
+    if (initialData.coverImage) setCoverImagePreview(initialData.coverImage);
     if (initialData.name) setName(initialData.name);
     if (initialData.department) setDepartment(initialData.department);
     if (initialData.yearOfStudy) setYear(initialData.yearOfStudy);
@@ -107,11 +111,40 @@ export const StudentProfileForm: React.FC<StudentProfileFormProps> = ({
     reader.readAsDataURL(file);
   };
 
+  const handleCoverImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      setErrors(prev => ({ ...prev, coverImage: 'Cover image must be less than 5 MB.' }));
+      return;
+    }
+
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      setErrors(prev => ({ ...prev, coverImage: 'Supported formats: JPG, JPEG, PNG, WebP.' }));
+      return;
+    }
+
+    setErrors(prev => {
+      const copy = { ...prev };
+      delete copy.coverImage;
+      return copy;
+    });
+
+    setCoverImageFile(file);
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setCoverImagePreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
 
-    if (!name.trim()) newErrors.name = 'Full name is required';
-    if (!collegeName.trim()) newErrors.collegeName = 'College name is required';
+    if (!name.trim() || name.trim().length < 2) newErrors.name = 'Name must be at least 2 characters';
+    if (!collegeName.trim() || collegeName.trim().length < 2) newErrors.collegeName = 'College name must be at least 2 characters';
     
     // Validate DoB
     if (!dateOfBirth) {
@@ -150,9 +183,9 @@ export const StudentProfileForm: React.FC<StudentProfileFormProps> = ({
     }
 
     // Location validation
-    if (!city.trim()) newErrors.city = 'City is required';
-    if (!state.trim()) newErrors.state = 'State is required';
-    if (!country.trim()) newErrors.country = 'Country is required';
+    if (!city.trim() || city.trim().length < 2) newErrors.city = 'City must be at least 2 characters';
+    if (!state.trim() || state.trim().length < 2) newErrors.state = 'State must be at least 2 characters';
+    if (!country.trim() || country.trim().length < 2) newErrors.country = 'Country must be at least 2 characters';
 
     // Skills validation
     if (skills.length === 0) {
@@ -161,15 +194,15 @@ export const StudentProfileForm: React.FC<StudentProfileFormProps> = ({
 
     // Social URLs validation
     if (linkedinURL.trim()) {
-      const linkedinRegex = /^(https?:\/\/)?(www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]+\/?$/;
-      if (!linkedinRegex.test(linkedinURL.trim()) && !linkedinURL.trim().includes('linkedin.com/in/')) {
+      const linkedinRegex = /^(https?:\/\/)?(www\.)?linkedin\.com\/in\/[a-zA-Z0-9_.-]+\/?$/i;
+      if (!linkedinRegex.test(linkedinURL.trim())) {
         newErrors.linkedinURL = 'Invalid LinkedIn URL format (e.g., https://linkedin.com/in/username)';
       }
     }
 
     if (githubURL.trim()) {
-      const githubRegex = /^(https?:\/\/)?(www\.)?github\.com\/[A-Za-z0-9_-]+\/?$/;
-      if (!githubRegex.test(githubURL.trim()) && !githubURL.trim().includes('github.com/')) {
+      const githubRegex = /^(https?:\/\/)?(www\.)?github\.com\/[a-zA-Z0-9_.-]+\/?$/i;
+      if (!githubRegex.test(githubURL.trim())) {
         newErrors.githubURL = 'Invalid GitHub URL format (e.g., https://github.com/username)';
       }
     }
@@ -207,10 +240,11 @@ export const StudentProfileForm: React.FC<StudentProfileFormProps> = ({
       },
       linkedinURL: linkedinURL.trim() || null,
       githubURL: githubURL.trim() || null,
-      photoURL: imagePreview // initial fallback
+      photoURL: imagePreview,
+      coverImage: coverImagePreview
     };
 
-    onSubmit(payload, imageFile);
+    onSubmit(payload, imageFile, coverImageFile);
   };
 
   return (
@@ -256,11 +290,47 @@ export const StudentProfileForm: React.FC<StudentProfileFormProps> = ({
         <div className="flex-1 space-y-1 text-center sm:text-left">
           <h4 className="text-sm font-bold text-slate-800">Profile Representation Photo</h4>
           <p className="text-xs text-slate-500 leading-relaxed">
-            {canUploadImage ? 'Google photo is selected by default. You can upload a customized image (JPG, PNG, WebP) up to 5 MB.' : 'Your profile photo is synced from your Google account. Only verified faculty and admins can upload custom avatars.'}
+            Google photo is selected by default. You can upload a customized image (JPG, PNG, WebP) up to 5 MB.
           </p>
           {errors.avatar && (
             <span className="text-[11px] text-rose-600 font-bold block">{errors.avatar}</span>
           )}
+        </div>
+      </div>
+
+      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 flex flex-col items-start gap-4">
+        <div className="w-full space-y-1 text-center sm:text-left mb-2">
+          <h4 className="text-sm font-bold text-slate-800">Profile Cover Banner</h4>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Upload a customized banner image (16:9 recommended).
+          </p>
+          {errors.coverImage && (
+            <span className="text-[11px] text-rose-600 font-bold block">{errors.coverImage}</span>
+          )}
+        </div>
+        
+        <div className="relative w-full h-32 sm:h-40 rounded-xl overflow-hidden bg-slate-200 group border-2 border-dashed border-slate-300">
+          {coverImagePreview ? (
+            <img
+              src={coverImagePreview}
+              alt="Cover Preview"
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400">
+              <Camera className="w-8 h-8 mb-2 opacity-50" />
+              <span className="text-xs font-bold uppercase">Upload Cover</span>
+            </div>
+          )}
+          <label className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+            <span className="bg-white/90 text-slate-900 px-4 py-2 rounded-lg text-xs font-bold">Change Cover</span>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleCoverImageChange}
+              className="hidden"
+            />
+          </label>
         </div>
       </div>
 

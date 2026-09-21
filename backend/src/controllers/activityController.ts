@@ -6,7 +6,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 // GET /api/activities
 export const getActivities = asyncHandler(async (req: Request, res: Response) => {
   const db = admin.firestore();
-  
+
   const snapshot = await db.collection('activities')
     .orderBy('createdAt', 'desc')
     .limit(50)
@@ -16,12 +16,21 @@ export const getActivities = asyncHandler(async (req: Request, res: Response) =>
 
   // Gather unique user UIDs to populate user metadata
   const uids = Array.from(new Set(activities.map((act: any) => act.user).filter(Boolean)));
-  
+
   if (uids.length > 0) {
     const userRefs = uids.map(uid => db.collection('users').doc(uid));
     const userDocs = await db.getAll(...userRefs);
-    const userMap: Record<string, any> = {};
-    
+    const userMap: Record<string, any> = {
+      'mock_educator_jayamurugan': {
+        id: 'mock_educator_jayamurugan',
+        firebaseUid: 'mock_educator_jayamurugan',
+        name: 'Jayamurugan',
+        photoURL: 'https://cdn.phototourl.com/free/2026-08-26-5659434f-46e0-4faa-8391-72dfeefaa208.jpg',
+        department: 'Computer Science',
+        collegeName: 'THENAM Campus'
+      }
+    };
+
     userDocs.forEach(doc => {
       if (doc.exists) {
         const d = doc.data() || {};
@@ -44,8 +53,13 @@ export const getActivities = asyncHandler(async (req: Request, res: Response) =>
     activities.forEach((act: any) => {
       if (act.user && userMap[act.user]) {
         act.user = userMap[act.user];
-      } else {
-        act.user = { name: 'Google User', photoURL: '' };
+      } else if (typeof act.user === 'string' && !act.user.startsWith('{')) {
+        act.user = {
+          id: act.user,
+          firebaseUid: act.user,
+          name: 'THENAM Member',
+          photoURL: ''
+        };
       }
     });
   }
@@ -61,10 +75,19 @@ export const createActivity = asyncHandler(async (req: any, res: Response) => {
     return sendResponse(res, 401, false, 'Unauthorized');
   }
 
-  const { type, title, description, badgeText, badgeTheme, metadata } = req.body;
-  
+  const { type, title, description, badgeText, badgeTheme, metadata, author } = req.body;
+
+  const authorData = {
+    id: uid,
+    name: req.user?.name || author?.name || 'THENAM Member',
+    avatar: req.user?.photoURL || author?.avatar || '',
+    headline: req.user?.department ? `${req.user.department} • ${req.user.collegeName || ''}` : (author?.headline || 'THENAM Member'),
+    college: req.user?.collegeName || author?.college || 'THENAM Campus'
+  };
+
   const activityData = {
     user: uid,
+    author: authorData,
     type: type || 'student_post',
     title: title || '',
     description: description || '',
@@ -80,7 +103,19 @@ export const createActivity = asyncHandler(async (req: any, res: Response) => {
   const docRef = await db.collection('activities').add(activityData);
   const newActivity = await docRef.get();
 
-  return sendResponse(res, 201, true, 'Activity created successfully.', { id: newActivity.id, ...newActivity.data() });
+  const activityDataResponse = { id: newActivity.id, ...newActivity.data() };
+
+  try {
+    const { io } = require('../server');
+    // Only notify if it's an educator/admin post
+    if (activityData.badgeTheme === 'purple' || req.user?.role === 'faculty' || req.user?.role === 'admin') {
+      io.emit('new_activity_notification', activityDataResponse);
+    }
+  } catch (err) {
+    console.error('Socket io emit error for new activity', err);
+  }
+
+  return sendResponse(res, 201, true, 'Activity created successfully.', activityDataResponse);
 });
 
 // DELETE /api/activities/:id
@@ -129,17 +164,17 @@ export const toggleLikeActivity = asyncHandler(async (req: any, res: Response) =
 
   const data = doc.data() || {};
   let likedBy = data.likedBy || [];
-  
+
   const hasLiked = likedBy.includes(uid);
   if (hasLiked) {
     likedBy = likedBy.filter((id: string) => id !== uid);
   } else {
     likedBy.push(uid);
   }
-  
+
   const likesCount = likedBy.length;
   await docRef.update({ likedBy, likesCount });
-  
+
   try {
     const { io } = require('../server');
     io.emit('activity_liked', { activityId, likesCount, likedBy });
@@ -173,11 +208,11 @@ export const commentActivity = asyncHandler(async (req: any, res: Response) => {
 
   const data = doc.data() || {};
   const comments = data.comments || [];
-  
+
   // Get user info for real-time broadcast payload
   const userDoc = await db.collection('users').doc(uid).get();
   const userData = userDoc.data() || {};
-  
+
   const newComment = {
     id: `c_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     text,
@@ -189,12 +224,12 @@ export const commentActivity = asyncHandler(async (req: any, res: Response) => {
       headline: userData.headline || userData.department || ''
     }
   };
-  
+
   comments.push(newComment);
   const commentsCount = comments.length;
-  
+
   await docRef.update({ comments, commentsCount });
-  
+
   try {
     const { io } = require('../server');
     io.emit('activity_commented', { activityId, comment: newComment, commentsCount });
